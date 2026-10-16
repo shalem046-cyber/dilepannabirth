@@ -23,7 +23,7 @@ jobs:
           from zipfile import ZipFile
           from PIL import Image, ImageOps, ImageDraw, ImageFont
           from io import BytesIO
-          import json, shutil, sys
+          import json, shutil, sys, base64
 
           archives = sorted(Path(".").glob("*.zip"))
           if not archives:
@@ -81,13 +81,14 @@ jobs:
               original = item["original_name"]
               draw.text((x, y+thumb_h+26), original[:38], fill=(200, 200, 200), font=small)
           sheet.save("assets/contact-sheet.jpg", "JPEG", quality=88, optimize=True)
+          (Path("assets") / "contact-sheet-data.txt").write_text(base64.b64encode(Path("assets/contact-sheet.jpg").read_bytes()).decode("ascii"), encoding="ascii")
           print(f"Prepared {len(photos)} photos and contact sheet.")
           PY
       - name: Commit extracted photos
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add assets/received assets/photos.json assets/contact-sheet.jpg
+          git add assets/received assets/photos.json assets/contact-sheet.jpg assets/contact-sheet-data.txt
           if git diff --cached --quiet; then
             echo "No photo changes to commit."
           else
