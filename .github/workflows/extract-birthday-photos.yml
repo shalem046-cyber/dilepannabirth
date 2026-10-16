@@ -1,0 +1,96 @@
+name: Extract birthday photos
+on:
+  push:
+    branches: [main]
+    paths:
+      - "index.html"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Extract and prepare uploaded photos
+        run: |
+          python -m pip install --quiet pillow
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          from PIL import Image, ImageOps, ImageDraw, ImageFont
+          from io import BytesIO
+          import json, shutil, sys
+
+          archives = sorted(Path(".").glob("*.zip"))
+          if not archives:
+              print("No ZIP archive found in the repository root.")
+              sys.exit(1)
+
+          output = Path("assets/received")
+          if output.exists():
+              shutil.rmtree(output)
+          output.mkdir(parents=True, exist_ok=True)
+
+          allowed = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
+          photos = []
+          for archive in archives:
+              with ZipFile(archive) as zf:
+                  for member in zf.infolist():
+                      if member.is_dir() or Path(member.filename).suffix.lower() not in allowed:
+                          continue
+                      try:
+                          raw = zf.read(member)
+                          im = Image.open(BytesIO(raw))
+                          im.seek(0)
+                          im = ImageOps.exif_transpose(im).convert("RGB")
+                          if im.width < 120 or im.height < 120:
+                              continue
+                          name = f"photo-{len(photos)+1:02d}.jpg"
+                          im.save(output / name, "JPEG", quality=91, optimize=True)
+                          photos.append({"file": f"received/{name}", "original_name": Path(member.filename).name, "width": im.width, "height": im.height})
+                      except Exception as exc:
+                          print(f"Skipped {member.filename}: {exc}")
+
+          if not photos:
+              print("No readable photos were found inside the ZIP.")
+              sys.exit(1)
+
+          (Path("assets") / "photos.json").write_text(json.dumps(photos, indent=2), encoding="utf-8")
+          columns, thumb_w, thumb_h, label_h, margin = 3, 320, 225, 48, 18
+          rows = (len(photos) + columns - 1) // columns
+          sheet = Image.new("RGB", (margin + columns*(thumb_w+margin), margin + rows*(thumb_h+label_h+margin)), (16, 17, 20))
+          draw = ImageDraw.Draw(sheet)
+          try:
+              font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+              small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+          except Exception:
+              font = small = ImageFont.load_default()
+
+          for i, item in enumerate(photos):
+              col, row = i % columns, i // columns
+              x, y = margin + col*(thumb_w+margin), margin + row*(thumb_h+label_h+margin)
+              with Image.open("assets/" + item["file"]) as im:
+                  im.thumbnail((thumb_w, thumb_h))
+                  px, py = x+(thumb_w-im.width)//2, y+(thumb_h-im.height)//2
+                  sheet.paste(im, (px, py))
+              draw.text((x, y+thumb_h+5), item["file"].split("/")[-1], fill=(220, 190, 130), font=font)
+              original = item["original_name"]
+              draw.text((x, y+thumb_h+26), original[:38], fill=(200, 200, 200), font=small)
+          sheet.save("assets/contact-sheet.jpg", "JPEG", quality=88, optimize=True)
+          print(f"Prepared {len(photos)} photos and contact sheet.")
+          PY
+      - name: Commit extracted photos
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/received assets/photos.json assets/contact-sheet.jpg
+          if git diff --cached --quiet; then
+            echo "No photo changes to commit."
+          else
+            git commit -m "Extract uploaded birthday photos into assets"
+            git push
+          fi
